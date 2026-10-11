@@ -44,7 +44,10 @@ function App() {
     if (!dragging) return;
     const onMove = event => {
       setPointerPos({x:event.clientX,y:event.clientY});
-      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-row][data-col]');
+      // On touch screens, use a point above the finger for the board target.
+      // This moves the actual block placement preview above the fingertip.
+      const hitY = event.pointerType === 'touch' ? event.clientY - 76 : event.clientY;
+      const target = document.elementFromPoint(event.clientX, hitY)?.closest('[data-row][data-col]');
       if (!target || !state?.code) return;
       const row = Number(target.dataset.row), col = Number(target.dataset.col);
       if (dragging.row === row && dragging.col === col) return;
@@ -52,7 +55,8 @@ function App() {
       socket.emit('previewMove', {code:state.code, pieceIndex:dragging.pieceIndex, row, col});
     };
     const onUp = event => {
-      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-row][data-col]');
+      const hitY = event.pointerType === 'touch' ? event.clientY - 76 : event.clientY;
+      const target = document.elementFromPoint(event.clientX, hitY)?.closest('[data-row][data-col]');
       if (target && state?.code) {
         const row = Number(target.dataset.row), col = Number(target.dataset.col);
         setSelected(dragging.pieceIndex);
