@@ -5,11 +5,12 @@ const SERVER_URL = import.meta.env.VITE_SERVER_URL || (import.meta.env.DEV ? 'ht
 const socket = io(SERVER_URL, { autoConnect: true });
 const N = 8;
 
-function MiniPiece({piece, selected, onClick, disabled}) {
+function MiniPiece({piece, selected, onClick, disabled, onPointerDown}) {
   const shape = piece?.shape || [];
   const w = piece?.w || 1, h = piece?.h || 1;
   return <button className={`piece-card ${selected ? 'selected' : ''} ${disabled ? 'piece-used' : ''}`}
-    onClick={onClick} disabled={disabled || !piece} aria-label="Selectează piesa">
+    onClick={onClick} onPointerDown={onPointerDown} disabled={disabled || !piece}
+    aria-label="Selectează piesa și trage-o pe tablă">
     <span className="mini-grid" style={{gridTemplateColumns:`repeat(${w}, 17px)`, gridTemplateRows:`repeat(${h}, 17px)`}}>
       {Array.from({length:w*h}, (_,i) => {
         const x=i%w, y=Math.floor(i/w);
@@ -29,12 +30,48 @@ function App() {
   const [notice,setNotice] = useState('');
   const [hoverCell,setHoverCell] = useState(null);
   const [busy,setBusy] = useState(false);
+  const [dragging,setDragging] = useState(null);
+  const [pointerPos,setPointerPos] = useState({x:0,y:0});
+  const [suppressClick,setSuppressClick] = useState(false);
 
   useEffect(() => {
-    const onState = next => { setState(next); setSelected(old => next.used[old] ? next.used.findIndex(v=>!v) : old); };
+    const onState = next => { setState(next); setSelected(old => next.used[old] ? Math.max(0, next.used.findIndex(v=>!v)) : old); };
     socket.on('state', onState);
     return () => socket.off('state', onState);
   }, []);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = event => {
+      setPointerPos({x:event.clientX,y:event.clientY});
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-row][data-col]');
+      if (!target || !state?.code) return;
+      const row = Number(target.dataset.row), col = Number(target.dataset.col);
+      if (dragging.row === row && dragging.col === col) return;
+      setDragging(old => old ? {...old, row, col} : old);
+      socket.emit('previewMove', {code:state.code, pieceIndex:dragging.pieceIndex, row, col});
+    };
+    const onUp = event => {
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-row][data-col]');
+      if (target && state?.code) {
+        const row = Number(target.dataset.row), col = Number(target.dataset.col);
+        setSelected(dragging.pieceIndex);
+        setSuppressClick(true);
+        place(row, col, dragging.pieceIndex);
+        window.setTimeout(()=>setSuppressClick(false), 250);
+      }
+      socket.emit('clearPreview', {code:state?.code});
+      setDragging(null);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [dragging, state?.code]);
 
   const players = state?.players || [];
   const me = players.find(p=>p.id===playerId);
@@ -65,10 +102,10 @@ function App() {
       history.replaceState({}, '', `?room=${result.code}`); setNotice('Te-ai conectat la cameră!');
     });
   }
-  function place(row,col) {
-    if (!state || state.players.length < 2 || state.used[selected] || !currentPiece || busy) return;
+  function place(row,col,pieceIndex=selected) {
+    if (!state || state.players.length < 2 || state.status !== 'playing' || state.used[pieceIndex] || !state.pieces[pieceIndex] || busy) return;
     setBusy(true);
-    socket.emit('placePiece', {code:state.code, pieceIndex:selected, row, col}, result => {
+    socket.emit('placePiece', {code:state.code, pieceIndex, row, col}, result => {
       setBusy(false);
       if (!result?.ok) setNotice(result?.error || 'Mutarea nu a reușit.');
       else setNotice('');
@@ -101,16 +138,31 @@ function App() {
       <div className="board-panel">
         <div className="score-header"><div><span className="eyebrow">SCORUL ECHIPEI</span><strong>{state.score.toLocaleString('ro-RO')}</strong></div><div className="players"><span className="avatar">☺</span><div><b>{me?.name || 'Tu'}</b><small>Tu</small></div><span className="plus">+</span><span className="avatar partner-avatar">☺</span><div><b>{partner?.name || 'Prietena ta'}</b><small>{partner?'Partener':'Se conectează…'}</small></div></div></div>
         {players.length<2 && <div className="waiting-banner"><span className="spinner"/> Trimite invitația pentru a începe împreună.</div>}
-        <div className="board" onMouseLeave={()=>setHoverCell(null)}>
+        {state.status==='gameover' && <div className="gameover-banner"><strong>GAME OVER</strong><span>Nu mai există nicio mutare posibilă. Scor final: {state.score}</span><button className="secondary-btn" onClick={()=>socket.emit('restartGame',{code:state.code},result=>{if(!result?.ok)setNotice(result?.error||'Nu s-a putut reporni.');})}>Joacă din nou</button></div>}
+        <div className={`board ${state.status==='gameover'?'board-ended':''}`} onMouseLeave={()=>setHoverCell(null)}>
           {state.board.map((row,r)=>row.map((cell,c)=>{
-            const preview = hoverCell && currentPiece?.shape.some(([dx,dy])=>hoverCell.row+dy===r&&hoverCell.col+dx===c);
-            return <button key={`${r}-${c}`} className={`board-cell ${cell?`occupied ${cell}`:''} ${preview?(validPreview?'preview-valid':'preview-invalid'):''}`}
+            const localPreview = dragging && dragging.pieceIndex===selected && dragging.row!==null && currentPiece?.shape.some(([dx,dy])=>dragging.row+dy===r&&dragging.col+dx===c);
+            const remotePreview = Object.values(state.previews || {}).find(p => p.playerId!==playerId && p.shape?.some(([dx,dy])=>p.row+dy===r&&p.col+dx===c));
+            const previewColor = remotePreview?.color || currentPiece?.color;
+            const localValid = dragging && currentPiece?.shape.every(([dx,dy])=>{const rr=dragging.row+dy,cc=dragging.col+dx;return rr>=0&&rr<N&&cc>=0&&cc<N&&state.board[rr][cc]===null;});
+            const remoteValid = remotePreview?.valid;
+            const previewClass = remotePreview ? `remote-preview ${remoteValid?'remote-valid':'remote-invalid'} ${previewColor}` : localPreview ? `preview-drag ${localValid?'preview-valid':'preview-invalid'} ${previewColor}` : '';
+            return <button key={`${r}-${c}`} data-row={r} data-col={c}
+              className={`board-cell ${cell?`occupied ${cell}`:''} ${previewClass}`}
               onMouseEnter={()=>setHoverCell({row:r,col:c})} onFocus={()=>setHoverCell({row:r,col:c})}
-              onClick={()=>place(r,c)} aria-label={`Rând ${r+1}, coloană ${c+1}`} />;
+              onClick={()=>{if(!suppressClick && !dragging) place(r,c)}} aria-label={`Rând ${r+1}, coloană ${c+1}`} disabled={state.status==='gameover'} />;
           }))}
         </div>
+        {dragging && <div className="drag-ghost" style={{left:pointerPos.x+14,top:pointerPos.y+14}}>
+          <span className="drag-ghost-label">Plasează piesa</span>
+          <div className="mini-grid" style={{gridTemplateColumns:`repeat(${state.pieces[dragging.pieceIndex].w}, 18px)`,gridTemplateRows:`repeat(${state.pieces[dragging.pieceIndex].h}, 18px)`}}>
+            {Array.from({length:state.pieces[dragging.pieceIndex].w*state.pieces[dragging.pieceIndex].h},(_,i)=>{const piece=state.pieces[dragging.pieceIndex],x=i%piece.w,y=Math.floor(i/piece.w);return <span key={i} className={`mini-cell ${piece.shape.some(([sx,sy])=>sx===x&&sy===y)?`filled ${piece.color}`:''}`}/>;})}
+          </div>
+        </div>}
+        {Object.values(state.previews || {}).some(p=>p.playerId!==playerId) && <p className="remote-preview-label">👀 {Object.values(state.previews).find(p=>p.playerId!==playerId)?.playerName} se gândește unde să plaseze piesa…</p>}
         <div className="piece-area"><div className="piece-heading"><div><span className="eyebrow">PIESE COMUNE</span><h3>Alegeți următoarea mutare</h3></div><span className="round-label">Set nou după 3 piese</span></div>
-          <div className="pieces">{state.pieces.map((piece,i)=><MiniPiece key={piece.id} piece={piece} selected={selected===i} disabled={state.used[i]} onClick={()=>setSelected(i)}/>)}</div>
+          <div className="pieces">{state.pieces.map((piece,i)=><MiniPiece key={piece.id} piece={piece} selected={selected===i} disabled={state.used[i] || state.status==='gameover'} onClick={()=>setSelected(i)}
+            onPointerDown={event=>{if(state.status!=='playing'||players.length<2||state.used[i])return;event.preventDefault();setSelected(i);setPointerPos({x:event.clientX,y:event.clientY});setDragging({pieceIndex:i,row:null,col:null});}}/>)}</div>
           <p className="hint">Selectează o piesă, apoi atinge celula din colțul stânga-sus unde vrei să o plasezi. Pe calculator poți folosi și mouse-ul.</p>
         </div>
       </div>

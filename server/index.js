@@ -39,12 +39,13 @@ function cryptoRandomId() { return Math.random().toString(36).slice(2, 10); }
 function newPieces() { return [makePiece(), makePiece(), makePiece()]; }
 function newRoom(code, hostId) {
   return { code, players: new Map(), board: Array.from({length: SIZE}, () => Array(SIZE).fill(null)),
-    pieces: newPieces(), used: [false,false,false], score: 0, hostId, status: 'waiting', lastAction: null };
+    pieces: newPieces(), used: [false,false,false], score: 0, hostId, status: 'waiting',
+    previews: new Map(), lastAction: null };
 }
 function publicState(room) {
   return { code: room.code, players: [...room.players.values()].map(p => ({id:p.id, name:p.name})),
     board: room.board, pieces: room.pieces, used: room.used, score: room.score, status: room.status,
-    lastAction: room.lastAction };
+    previews: Object.fromEntries(room.previews), lastAction: room.lastAction };
 }
 function broadcast(room) { io.to(room.code).emit('state', publicState(room)); }
 function randomCode() {
@@ -59,6 +60,19 @@ function canPlace(board, piece, row, col) {
     return r >= 0 && r < SIZE && c >= 0 && c < SIZE && board[r][c] === null;
   });
 }
+function hasAnyMoves(room) {
+  for (let i = 0; i < room.pieces.length; i++) {
+    if (room.used[i]) continue;
+    const piece = room.pieces[i];
+    for (let row = 0; row < SIZE; row++) {
+      for (let col = 0; col < SIZE; col++) {
+        if (canPlace(room.board, piece, row, col)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 function placePiece(room, pieceIndex, row, col, playerName) {
   const piece = room.pieces[pieceIndex];
   if (!piece || room.used[pieceIndex] || !canPlace(room.board, piece, row, col)) return false;
@@ -76,6 +90,11 @@ function placePiece(room, pieceIndex, row, col, playerName) {
   room.score += cells + cleared.size * 10;
   if (cleared.size) room.lastAction = `${playerName} a completat ${cleared.size} linie/coloană!`;
   if (room.used.every(Boolean)) { room.pieces = newPieces(); room.used = [false,false,false]; }
+  room.previews.clear();
+  if (!hasAnyMoves(room)) {
+    room.status = 'gameover';
+    room.lastAction = 'Game over! Nu mai există mutări posibile.';
+  }
   return true;
 }
 
@@ -103,10 +122,44 @@ io.on('connection', socket => {
   socket.on('placePiece', ({code, pieceIndex, row, col}, cb) => {
     const room = rooms.get(String(code || '').toUpperCase());
     if (!room || !room.players.has(socket.id)) return cb?.({ok:false, error:'Nu ești în această cameră.'});
+    if (room.status === 'gameover') return cb?.({ok:false, error:'Partida s-a terminat. Apăsați „Joacă din nou”.'});
     if (room.players.size < 2) return cb?.({ok:false, error:'Așteptăm al doilea jucător.'});
+    if (room.status !== 'playing') return cb?.({ok:false, error:'Partida nu a început încă.'});
     if (!Number.isInteger(pieceIndex) || !Number.isInteger(row) || !Number.isInteger(col)) return cb?.({ok:false, error:'Mutare invalidă.'});
     const player = room.players.get(socket.id);
     if (!placePiece(room, pieceIndex, row, col, player.name)) return cb?.({ok:false, error:'Piesa nu încape aici.'});
+    cb?.({ok:true});
+    broadcast(room);
+  });
+  socket.on('previewMove', ({code, pieceIndex, row, col}) => {
+    const room = rooms.get(String(code || '').toUpperCase());
+    if (!room || !room.players.has(socket.id) || room.status !== 'playing') return;
+    const piece = room.pieces[pieceIndex];
+    if (!piece || room.used[pieceIndex] || !Number.isInteger(row) || !Number.isInteger(col)) {
+      room.previews.delete(socket.id);
+      broadcast(room);
+      return;
+    }
+    const valid = canPlace(room.board, piece, row, col);
+    room.previews.set(socket.id, {playerId:socket.id, playerName:room.players.get(socket.id).name,
+      pieceIndex, row, col, color:piece.color, valid, shape:piece.shape});
+    broadcast(room);
+  });
+  socket.on('clearPreview', ({code}) => {
+    const room = rooms.get(String(code || '').toUpperCase());
+    if (!room || !room.players.has(socket.id)) return;
+    if (room.previews.delete(socket.id)) broadcast(room);
+  });
+  socket.on('restartGame', ({code}, cb) => {
+    const room = rooms.get(String(code || '').toUpperCase());
+    if (!room || !room.players.has(socket.id)) return cb?.({ok:false, error:'Nu ești în această cameră.'});
+    room.board = Array.from({length: SIZE}, () => Array(SIZE).fill(null));
+    room.pieces = newPieces();
+    room.used = [false,false,false];
+    room.score = 0;
+    room.status = room.players.size === 2 ? 'playing' : 'waiting';
+    room.previews.clear();
+    room.lastAction = 'A început o partidă nouă!';
     cb?.({ok:true});
     broadcast(room);
   });
@@ -114,7 +167,8 @@ io.on('connection', socket => {
     for (const [code, room] of rooms) {
       if (room.players.has(socket.id)) {
         room.players.delete(socket.id);
-        if (room.players.size < 2) room.status = 'waiting';
+        room.previews.delete(socket.id);
+        if (room.players.size < 2 && room.status !== 'gameover') room.status = 'waiting';
         if (room.players.size === 0) rooms.delete(code);
         else broadcast(room);
       }
