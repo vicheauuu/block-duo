@@ -46,7 +46,7 @@ function App() {
       setPointerPos({x:event.clientX,y:event.clientY});
       // On touch screens, use a point above the finger for the board target.
       // This moves the actual block placement preview above the fingertip.
-      const hitY = event.pointerType === 'touch' ? event.clientY - 76 : event.clientY;
+      const hitY = event.pointerType === 'touch' ? event.clientY - 160 : event.clientY;
       const target = document.elementFromPoint(event.clientX, hitY)?.closest('[data-row][data-col]');
       if (!target || !state?.code) return;
       const row = Number(target.dataset.row), col = Number(target.dataset.col);
@@ -55,7 +55,7 @@ function App() {
       socket.emit('previewMove', {code:state.code, pieceIndex:dragging.pieceIndex, row, col});
     };
     const onUp = event => {
-      const hitY = event.pointerType === 'touch' ? event.clientY - 76 : event.clientY;
+      const hitY = event.pointerType === 'touch' ? event.clientY - 160 : event.clientY;
       const target = document.elementFromPoint(event.clientX, hitY)?.closest('[data-row][data-col]');
       if (target && state?.code) {
         const row = Number(target.dataset.row), col = Number(target.dataset.col);
@@ -158,7 +158,6 @@ function App() {
           }))}
         </div>
         {dragging && <div className="drag-ghost" style={{left:pointerPos.x,top:pointerPos.y-22}}>
-          <span className="drag-ghost-label">Plasează piesa</span>
           <div className="mini-grid" style={{gridTemplateColumns:`repeat(${state.pieces[dragging.pieceIndex].w}, 18px)`,gridTemplateRows:`repeat(${state.pieces[dragging.pieceIndex].h}, 18px)`}}>
             {Array.from({length:state.pieces[dragging.pieceIndex].w*state.pieces[dragging.pieceIndex].h},(_,i)=>{const piece=state.pieces[dragging.pieceIndex],x=i%piece.w,y=Math.floor(i/piece.w);return <span key={i} className={`mini-cell ${piece.shape.some(([sx,sy])=>sx===x&&sy===y)?`filled ${piece.color}`:''}`}/>;})}
           </div>
