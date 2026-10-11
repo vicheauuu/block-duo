@@ -20,3 +20,13 @@ button,input{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allow
 .gameover-banner span{flex:1;font-size:12px;color:#ffd7df}
 .board-ended{opacity:.65}
 @media(max-width:560px){.gameover-banner{gap:8px}.gameover-banner span{flex-basis:100%;order:3}.drag-ghost{transform:scale(.9);transform-origin:top left}}
+
+/* Keep the dragged piece preview above the finger/cursor so the target stays visible. */
+.drag-ghost{
+  transform:translate(-50%,-100%);
+}
+@media(max-width:560px){
+  .drag-ghost{
+    transform:translate(-50%,-100%);
+  }
+}

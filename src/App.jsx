@@ -153,7 +153,7 @@ function App() {
               onClick={()=>{if(!suppressClick && !dragging) place(r,c)}} aria-label={`Rând ${r+1}, coloană ${c+1}`} disabled={state.status==='gameover'} />;
           }))}
         </div>
-        {dragging && <div className="drag-ghost" style={{left:pointerPos.x+14,top:pointerPos.y+14}}>
+        {dragging && <div className="drag-ghost" style={{left:pointerPos.x,top:pointerPos.y-22}}>
           <span className="drag-ghost-label">Plasează piesa</span>
           <div className="mini-grid" style={{gridTemplateColumns:`repeat(${state.pieces[dragging.pieceIndex].w}, 18px)`,gridTemplateRows:`repeat(${state.pieces[dragging.pieceIndex].h}, 18px)`}}>
             {Array.from({length:state.pieces[dragging.pieceIndex].w*state.pieces[dragging.pieceIndex].h},(_,i)=>{const piece=state.pieces[dragging.pieceIndex],x=i%piece.w,y=Math.floor(i/piece.w);return <span key={i} className={`mini-cell ${piece.shape.some(([sx,sy])=>sx===x&&sy===y)?`filled ${piece.color}`:''}`}/>;})}
